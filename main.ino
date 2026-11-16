@@ -1,38 +1,174 @@
-#define PIN_BTN 2
-#define PIN_LED 5
 
-const unsigned long DEBOUNCE_DELAY = 15;
+#include <LiquidCrystal.h>
+#include <DHT.h>
 
-int buttonState = LOW;          
-int lastButtonState = LOW;      
-unsigned long lastDebounceTime = 0;
-bool ledState = LOW;
+#define DHTPIN 2
+#define DHTTYPE DHT22
 
-void setup(void) {
-    Serial.begin(9600);
-    pinMode(PIN_BTN, INPUT);    /* External pull-down: idle = LOW, pressed = HIGH */
-    pinMode(PIN_LED, OUTPUT);
+#define PINBUTTON 7
+#define PINLED 3
+#define SOILPIN A0
+
+// Pages
+#define TEMP 0
+#define HUMIDITY 1
+#define MOISTURE 2
+#define PAGE_COUNT 3
+
+// Special screens
+#define LOADING 3
+#define ERR 4
+#define TPTEF 5
+
+DHT dht(DHTPIN, DHTTYPE);
+LiquidCrystal lcd(12, 11, 5, 4, 8, 9);
+
+int current = TEMP;
+
+bool lastRawButton = HIGH;
+bool stableButton = HIGH;
+
+unsigned long lastDebounce = 0;
+unsigned long lastRead = 0;
+
+const unsigned long DEBOUNCE_DELAY = 40;
+const unsigned long READ_INTERVAL = 2000;
+
+float temperature = NAN;
+float humidity = NAN;
+int moisture = 0;
+
+void render_page() {
+    lcd.clear();
+
+    switch (current) {
+        case TEMP:
+            lcd.print("Temperature:");
+            lcd.setCursor(0, 1);
+
+            if (isnan(temperature)) {
+                lcd.print("Sensor error");
+            } else {
+                lcd.print(temperature, 1);
+                lcd.print((char)223);
+                lcd.print("C");
+            }
+            break;
+
+        case HUMIDITY:
+            lcd.print("Humidity:");
+            lcd.setCursor(0, 1);
+
+            if (isnan(humidity)) {
+                lcd.print("Sensor error");
+            } else {
+                lcd.print(humidity, 1);
+                lcd.print("%");
+            }
+            break;
+
+        case MOISTURE:
+          lcd.print("Soil moisture:");
+          lcd.setCursor(0, 1);
+          lcd.print(map(moisture, 0, 1023, 0, 100));
+          lcd.print("%");
+          break;
+
+        case LOADING:
+            lcd.print("System online");
+            lcd.setCursor(0, 1);
+            lcd.print("Starting...");
+            break;
+
+        case ERR:
+            lcd.print("Oops!");
+            lcd.setCursor(0, 1);
+            lcd.print("Something failed");
+            break;
+
+        case TPTEF:
+            lcd.print("2+2=5");
+            break;
+
+        default:
+            lcd.print("Unknown page");
+            break;
+    }
 }
 
-void loop(void) {
-    int reading = digitalRead(PIN_BTN);
+void read_sensors() {
+    temperature = dht.readTemperature();
+    humidity = dht.readHumidity();
+    moisture = analogRead(SOILPIN);
 
-    if (reading != lastButtonState) {
-        lastDebounceTime = millis();
+    Serial.print("Temperature: ");
+    Serial.print(temperature);
+    Serial.print(" C | Humidity: ");
+    Serial.print(humidity);
+    Serial.print(" % | Soil raw: ");
+    Serial.println(moisture);
+}
+
+void setup() {
+    pinMode(PINBUTTON, INPUT_PULLUP);
+    pinMode(PINLED, OUTPUT);
+
+    Serial.begin(9600);
+
+    dht.begin();
+
+    lcd.begin(16, 2);
+    current = TPTEF;
+    render_page();
+    delay(500);
+    current = LOADING;
+    render_page();
+
+    delay(2000);
+
+    current = TEMP;
+    read_sensors();
+    render_page();
+
+    lastRead = millis();
+}
+
+void loop() {
+    unsigned long now = millis();
+
+    // Button debounce
+    bool rawButton = digitalRead(PINBUTTON);
+
+    if (rawButton != lastRawButton) {
+        lastDebounce = now;
+        lastRawButton = rawButton;
     }
 
-    if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
-        if (reading != buttonState) {
-            buttonState = reading;
+    if (now - lastDebounce >= DEBOUNCE_DELAY) {
+        if (rawButton != stableButton) {
+            stableButton = rawButton;
 
-            if (buttonState == HIGH) {
-                // Toggle LED state on press
-                ledState = !ledState;
-                digitalWrite(PIN_LED, ledState);
-                Serial.println("pressed");
+            // Trigger only when pressed
+            if (stableButton == LOW) {
+                current++;
+
+                if (current >= PAGE_COUNT) {
+                    current = TEMP;
+                }
+
+                render_page();
             }
         }
     }
 
-    lastButtonState = reading;
+    // LED follows button
+    digitalWrite(PINLED, stableButton == LOW);
+
+    // Read sensors every 2 seconds
+    if (now - lastRead >= READ_INTERVAL) {
+        lastRead = now;
+
+        read_sensors();
+        render_page();
+    }
 }
