@@ -30,13 +30,18 @@ bool stableButton = HIGH;
 
 unsigned long lastDebounce = 0;
 unsigned long lastRead = 0;
+unsigned long buttonPressTime = 0;
 
 const unsigned long DEBOUNCE_DELAY = 40;
 const unsigned long READ_INTERVAL = 2000;
+const unsigned long HOLD_DELAY = 1000;
 
 float temperature = NAN;
 float humidity = NAN;
 int moisture = 0;
+
+bool paused = false;
+bool longPressHandled = false;
 
 void render_page() {
     lcd.clear();
@@ -68,11 +73,11 @@ void render_page() {
             break;
 
         case MOISTURE:
-          lcd.print("Soil moisture:");
-          lcd.setCursor(0, 1);
-          lcd.print(map(moisture, 0, 1023, 0, 100));
-          lcd.print("%");
-          break;
+            lcd.print("Soil moisture:");
+            lcd.setCursor(0, 1);
+            lcd.print(map(moisture, 0, 1023, 0, 100));
+            lcd.print("%");
+            break;
 
         case LOADING:
             lcd.print("System online");
@@ -93,6 +98,12 @@ void render_page() {
         default:
             lcd.print("Unknown page");
             break;
+    }
+
+    // Display [P] when paused
+    if (paused) {
+        lcd.setCursor(13, 0);
+        lcd.print("[P]");
     }
 }
 
@@ -118,12 +129,13 @@ void setup() {
     dht.begin();
 
     lcd.begin(16, 2);
+
     current = TPTEF;
     render_page();
     delay(500);
+
     current = LOADING;
     render_page();
-
     delay(2000);
 
     current = TEMP;
@@ -145,29 +157,51 @@ void loop() {
     }
 
     if (now - lastDebounce >= DEBOUNCE_DELAY) {
+
         if (rawButton != stableButton) {
             stableButton = rawButton;
 
-            // Trigger only when pressed
+            // Button pressed
             if (stableButton == LOW) {
-                current++;
+                buttonPressTime = now;
+                longPressHandled = false;
+            }
 
-                if (current >= PAGE_COUNT) {
-                    current = TEMP;
+            // Button released
+            else {
+                // Short press switches page
+                if (!longPressHandled) {
+                    current++;
+
+                    if (current >= PAGE_COUNT) {
+                        current = TEMP;
+                    }
+
+                    render_page();
                 }
-
-                render_page();
             }
         }
+    }
+
+    // Detect 1-second hold
+    if (stableButton == LOW &&
+        !longPressHandled &&
+        now - buttonPressTime >= HOLD_DELAY) {
+
+        paused = !paused;
+        longPressHandled = true;
+
+        render_page();
+
+        Serial.println(paused ? "System paused" : "System resumed");
     }
 
     // LED follows button
     digitalWrite(PINLED, stableButton == LOW);
 
     // Read sensors every 2 seconds
-    if (now - lastRead >= READ_INTERVAL) {
+    if (!paused && now - lastRead >= READ_INTERVAL) {
         lastRead = now;
-
         read_sensors();
         render_page();
     }
